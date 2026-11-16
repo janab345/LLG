@@ -25,30 +25,41 @@ class Config:
 
     # Initial Flight Parameters
     START_ALTITUDE = 500.0  # meters
-    START_RANGE = 300.0  # meters distance to pad center (as seen in mission reference)
-    START_POS_X = -300.0  # lander starting X coordinate (firmly on the LEFT side of pad at x=0)
+    START_RANGE = 300.0  # meters distance to pad center
+    START_POS_X = -300.0  # lander starting X coordinate (left side of pad at x=0)
     START_VERTICAL_VELOCITY = 0.0  # m/s
     START_HORIZONTAL_VELOCITY = 0.0  # m/s
     START_TILT_ANGLE = 0.0  # degrees (0 = vertical)
     START_FUEL_CONSUMED = 0  # percentage (0% to 100%)
 
     # Physics Constants
-    GRAVITY_HARD = 1.62  # Moon gravity: 1.62 m/s^2
-    GRAVITY_EASY = 0.00  # Zero-g mode: 0 m/s^2
+    # Both Easy and Hard have 1.62 m/s^2 Moon gravity
+    MOON_GRAVITY = 1.62  # Moon gravity: 1.62 m/s^2
+    GRAVITY_HARD = 1.62
+    GRAVITY_EASY = 1.62
 
     MAIN_THRUST_ACCEL = 3.50  # m/s^2 acceleration along lander normal
     PITCH_SPEED = 30.0  # degrees per second tilt rate
 
     # Fuel Consumption (Mass flow per second)
-    MAIN_THRUST_FUEL_RATE = 2.5  # % fuel consumed per second of thrust
-    PITCH_FUEL_RATE = 0.5  # % fuel consumed per second of pitch
+    # Hard Mode: Default fuel rate (strict propellant budget)
+    HARD_MAIN_THRUST_FUEL_RATE = 2.5  # % fuel consumed per second of thrust
+    HARD_PITCH_FUEL_RATE = 0.5  # % fuel consumed per second of pitch
+
+    # Easy Mode: Generous fuel (2.5x more flight endurance)
+    EASY_MAIN_THRUST_FUEL_RATE = 1.0  # % fuel consumed per second of thrust
+    EASY_PITCH_FUEL_RATE = 0.2  # % fuel consumed per second of pitch
+
+    # Backwards compatibility aliases
+    MAIN_THRUST_FUEL_RATE = HARD_MAIN_THRUST_FUEL_RATE
+    PITCH_FUEL_RATE = HARD_PITCH_FUEL_RATE
 
     # Constraints for Successful Landing
     # Hard Mode Constraints (strict from LLG.md)
     HARD_MAX_SINK_RATE = 1.0  # Sink rate < 1.0 m/s
     HARD_MAX_TILT_ANGLE = 10.0  # Tilt angle < 10 degrees
 
-    # Easy Mode Constraints (relaxed)
+    # Easy Mode Constraints (relaxed from LLG.md)
     EASY_MAX_SINK_RATE = 3.0  # Sink rate < 3.0 m/s
     EASY_MAX_TILT_ANGLE = 25.0  # Tilt angle < 25 degrees
 

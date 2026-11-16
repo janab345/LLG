@@ -23,8 +23,10 @@ export default function App() {
     landing_success: false,
     status_message: 'Connecting to Gymnasium...',
     mode: 'Easy',
+    gravity: 1.62,
     last_action: 0,
     is_paused: false,
+    is_autopilot: false,
     sink_rate: 0,
     max_sink_rate: 3.0,
     max_tilt_angle: 25.0,
@@ -142,6 +144,9 @@ export default function App() {
         e.preventDefault();
         const nextMode = gameState.mode === 'Hard' ? 'Easy' : 'Hard';
         sendCommand('set_mode', { mode: nextMode });
+      } else if (e.code === 'KeyP') {
+        e.preventDefault();
+        sendCommand('toggle_autopilot');
       }
     };
 
@@ -166,7 +171,7 @@ export default function App() {
     };
   }, [gameState.mode]);
 
-  // Canvas Vector Wireframe Rendering (Atari 2D Style)
+  // Canvas Vector Wireframe Rendering (Atari 2D Style matching reference image)
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -183,11 +188,9 @@ export default function App() {
 
     // 2. Pad & Flags Geometry
     const centerX = width / 2;
-    // Altitude scale: 550m span maps to canvas height above ground
     const scaleY = (groundY - 140) / 550.0;
-    
-    // Scale & Pad Width: Generously sized landing pad on both responsive and desktop
-    // In responsive mode, pad is wide (~42% of screen, min 150px) so landing is clear and fair
+
+    // Pad Width: Generously sized landing pad between flags
     const padWidthPx = isPortrait
       ? Math.max(150, Math.min(width * 0.44, 220))
       : Math.max(180, (gameState.pad_width || 100.0) * ((width * 0.72) / 700.0));
@@ -195,114 +198,23 @@ export default function App() {
     const leftFlagX = centerX - padWidthPx / 2;
     const rightFlagX = centerX + padWidthPx / 2;
 
-    // =========================================================================
-    // LUNAR TERRAIN WITH CRATERS (Atari 2D Vector Style)
-    // =========================================================================
-    const leftSpan = leftFlagX;
-    const rightSpan = width - rightFlagX;
-
-    // Defined craters: [centerX, radius, bowlDepth, rimElevation]
-    const craters = [
-      // Left terrain craters
-      [leftSpan * 0.18, Math.max(28, leftSpan * 0.12), 18, 4],
-      [leftSpan * 0.52, Math.max(42, leftSpan * 0.18), 28, 7],
-      [leftSpan * 0.82, Math.max(22, leftSpan * 0.09), 14, 3],
-      // Right terrain craters
-      [rightFlagX + rightSpan * 0.20, Math.max(24, rightSpan * 0.09), 16, 4],
-      [rightFlagX + rightSpan * 0.54, Math.max(46, rightSpan * 0.19), 30, 8],
-      [rightFlagX + rightSpan * 0.84, Math.max(30, rightSpan * 0.13), 20, 5],
-    ];
-
-    // Surface elevation at x coordinate
-    const getTerrainElevation = (x) => {
-      // Landing pad plateau between flags remains perfectly flat
-      if (x >= leftFlagX - 6 && x <= rightFlagX + 6) {
-        return groundY;
-      }
-      let y = groundY;
-      for (const [cx, r, depth, rim] of craters) {
-        const dx = Math.abs(x - cx);
-        if (dx < r) {
-          const norm = dx / r;
-          if (norm < 0.70) {
-            // Interior bowl depression
-            const bowlRatio = 1.0 - Math.pow(norm / 0.70, 2);
-            y += depth * bowlRatio;
-          } else {
-            // Raised ejecta rim lip
-            const t = (norm - 0.70) / 0.30;
-            y -= rim * Math.sin(t * Math.PI);
-          }
-        }
-      }
-      return y;
-    };
-
-    // 1. Distant background lunar mountain & crater ridge
-    ctx.save();
-    ctx.strokeStyle = '#1d2129';
+    // Clean Ground Line (Atari wireframe)
+    ctx.strokeStyle = '#272a31';
     ctx.lineWidth = 1.5;
     ctx.beginPath();
-    for (let x = 0; x <= width; x += 25) {
-      const bgY = groundY - 22 - 14 * Math.sin(x * 0.006) - 8 * Math.cos(x * 0.016);
-      if (x === 0) ctx.moveTo(x, bgY);
-      else ctx.lineTo(x, bgY);
-    }
-    ctx.stroke();
-    ctx.restore();
-
-    // 2. Foreground cratered regolith body fill
-    ctx.save();
-    ctx.beginPath();
     ctx.moveTo(0, groundY);
-    const stepPx = 4;
-    for (let x = 0; x <= width; x += stepPx) {
-      ctx.lineTo(x, getTerrainElevation(x));
-    }
-    ctx.lineTo(width, height);
-    ctx.lineTo(0, height);
-    ctx.closePath();
-    ctx.fillStyle = '#13161a';
-    ctx.fill();
-
-    // 3. Vector outline of the cratered terrain surface
-    ctx.strokeStyle = '#3e4552';
-    ctx.lineWidth = 1.8;
-    ctx.beginPath();
-    for (let x = 0; x <= width; x += stepPx) {
-      const y = getTerrainElevation(x);
-      if (x === 0) ctx.moveTo(x, y);
-      else ctx.lineTo(x, y);
-    }
+    ctx.lineTo(width, groundY);
     ctx.stroke();
 
-    // 4. Vector crater rim ellipses & bowl contour arcs (giving 2D depth)
-    for (const [cx, r, depth] of craters) {
-      if (cx - r < -20 || cx + r > width + 20) continue;
-      // Crater rim perspective ellipse
-      ctx.strokeStyle = '#2b303a';
-      ctx.lineWidth = 1.2;
-      ctx.beginPath();
-      ctx.ellipse(cx, groundY, r * 0.88, r * 0.22, 0, 0, Math.PI * 2);
-      ctx.stroke();
-
-      // Interior floor contour arc
-      ctx.strokeStyle = '#20242c';
-      ctx.beginPath();
-      ctx.ellipse(cx, groundY + depth * 0.55, r * 0.52, depth * 0.26, 0, 0, Math.PI);
-      ctx.stroke();
-    }
-
-    // 5. Flat Landing Pad Strip (Clear, highlighted runway between the flags)
-    ctx.strokeStyle = '#64748b';
-    ctx.lineWidth = 2.4;
+    // Pad Landing Surface Line
+    ctx.strokeStyle = '#4b5563';
+    ctx.lineWidth = 2;
     ctx.beginPath();
     ctx.moveTo(leftFlagX, groundY);
     ctx.lineTo(rightFlagX, groundY);
     ctx.stroke();
-    ctx.restore();
 
-    // Helper: Draw Atari Wireframe Flag matching reference image
+    // Atari Wireframe Flag matching reference image
     const drawFlag = (fx, fy) => {
       ctx.save();
       ctx.strokeStyle = '#dce1e8';
@@ -330,21 +242,18 @@ export default function App() {
     drawFlag(leftFlagX, groundY);
     drawFlag(rightFlagX, groundY);
 
-    // 3. Draw 2D Atari Lunar Lander
-    // Calculate lander horizontal coordinate: Guaranteed to start on the LEFT side
-    const rawPosX = gameState.pos_x !== undefined 
-      ? gameState.pos_x 
+    // 3. Draw 2D Atari Lunar Lander (Exact design from reference image)
+    const rawPosX = gameState.pos_x !== undefined
+      ? gameState.pos_x
       : (gameState.range_to_pad ? -Math.abs(gameState.range_to_pad) : -300);
 
-    // Coordinate mapping ensuring lander starts on the left side of the screen
     const desktopScaleX = (width * 0.72) / 700.0;
-    const responsiveTravelSpan = centerX - 65; // On mobile, starts ~65px from left edge
+    const responsiveTravelSpan = centerX - 65;
     const landerX = isPortrait
       ? centerX + (rawPosX / 300.0) * responsiveTravelSpan
       : centerX + rawPosX * desktopScaleX;
-    
-    // SURFACE FIX: Footpad bottom is at local Y = +26.
-    // By subtracting 26, at altitude = 0, the footpads rest exactly on groundY without sinking below!
+
+    // Footpads rest exactly on groundY at alt = 0
     const landerY = groundY - (gameState.altitude * scaleY) - 26;
 
     ctx.save();
@@ -356,7 +265,7 @@ export default function App() {
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
 
-    // Top Hexagonal Capsule with horizontal slit `[-]`
+    // A. Top Hexagonal Capsule with horizontal slit `[-]`
     ctx.beginPath();
     ctx.moveTo(-16, -26);
     ctx.lineTo(16, -26);
@@ -373,12 +282,12 @@ export default function App() {
     ctx.lineTo(8, -14);
     ctx.stroke();
 
-    // Descent Stage: Horizontal Base Rectangle
+    // B. Descent Stage: Horizontal Base Rectangle
     ctx.beginPath();
     ctx.rect(-22, -2, 44, 12);
     ctx.stroke();
 
-    // Left Leg & Footpad
+    // C. Left Leg & Footpad
     ctx.beginPath();
     ctx.moveTo(-16, 10);
     ctx.lineTo(-30, 26);
@@ -389,7 +298,7 @@ export default function App() {
     ctx.lineTo(-24, 26);
     ctx.stroke();
 
-    // Right Leg & Footpad
+    // D. Right Leg & Footpad
     ctx.beginPath();
     ctx.moveTo(16, 10);
     ctx.lineTo(30, 26);
@@ -449,7 +358,7 @@ export default function App() {
 
       ctx.font = '13px monospace';
       ctx.fillStyle = '#cbd5e1';
-      ctx.fillText('Press [R] to Restart | [M] to Toggle Mode', width / 2, height / 2 + 40);
+      ctx.fillText('Press [R] to Restart | [M] to Toggle Mode', width / 2, height / 2 + 35);
       ctx.restore();
     }
 
@@ -480,8 +389,6 @@ export default function App() {
   const isPortrait = windowDimensions.width < 768;
   const fuelRemainingPct = Math.max(0, Math.min(100, 100 - gameState.fuel_consumed));
   const altRatioPct = Math.max(0, Math.min(100, (gameState.altitude / 500) * 100));
-
-  // Calibrated non-negative Range distance
   const rangeDisplay = Math.round(Math.abs(gameState.range_to_pad));
 
   return (
@@ -495,7 +402,7 @@ export default function App() {
       overflow: 'hidden',
     }}>
       {/* =========================================================================
-          TOP HUD (Responsive Multi-Lane Layout)
+          TOP HUD (Matching Reference Image)
          ========================================================================= */}
       <div style={{
         position: 'absolute',
@@ -509,7 +416,7 @@ export default function App() {
         gap: 10,
         pointerEvents: 'none',
       }}>
-        {/* --- LANE 1: Time & Quick Utilities --- */}
+        {/* --- LANE 1 --- */}
         <div style={{
           display: 'flex',
           justifyContent: isPortrait ? 'space-between' : 'center',
@@ -518,7 +425,7 @@ export default function App() {
           position: isPortrait ? 'static' : 'relative',
           pointerEvents: 'auto',
         }}>
-          {/* In Landscape: Left cluster sits in Lane 1 */}
+          {/* In Landscape: Left cluster */}
           {!isPortrait && (
             <div style={{ position: 'absolute', left: 0, display: 'flex', gap: 8, alignItems: 'center' }}>
               <div
@@ -527,7 +434,9 @@ export default function App() {
                   const next = gameState.mode === 'Easy' ? 'Hard' : 'Easy';
                   sendCommand('set_mode', { mode: next });
                 }}
-                title="Click to toggle Mode [M]"
+                title={gameState.mode === 'Easy'
+                  ? 'Easy Mode: Moon Gravity (1.62 m/s²), Generous Fuel, Relaxed Limits (Click to toggle to Hard [M])'
+                  : 'Hard Mode: Moon Gravity (1.62 m/s²), Default Fuel, Strict Limits (Click to toggle to Easy [M])'}
               >
                 Mode: {gameState.mode}
               </div>
@@ -545,7 +454,7 @@ export default function App() {
             Time: {formatTimeStr(gameState.elapsed_time)}
           </div>
 
-          {/* In Landscape: Right cluster sits in Lane 1 */}
+          {/* In Landscape: Right cluster */}
           {!isPortrait && (
             <div style={{ position: 'absolute', right: 0, display: 'flex', gap: 8, alignItems: 'center' }}>
               <div className="telemetry-pill">
@@ -598,7 +507,7 @@ export default function App() {
           )}
         </div>
 
-        {/* --- LANE 2: Responsive Second Lane (Active on portrait / narrow screens) --- */}
+        {/* --- LANE 2: Responsive Second Lane (Portrait / narrow screens) --- */}
         {isPortrait && (
           <div style={{
             display: 'flex',
@@ -607,7 +516,7 @@ export default function App() {
             width: '100%',
             pointerEvents: 'auto',
           }}>
-            {/* Left Stack (Sink Rate & Hor Vel) */}
+            {/* Left Stack */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'flex-start' }}>
               <div className="telemetry-pill" style={{ fontSize: 12, padding: '5px 10px' }}>
                 Sink Rate: {Math.round(gameState.sink_rate)}m/s
@@ -617,7 +526,7 @@ export default function App() {
               </div>
             </div>
 
-            {/* Right Stack (Range, Mode, Tilt) */}
+            {/* Right Stack */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'flex-end' }}>
               <div className="telemetry-pill" style={{ fontSize: 12, padding: '5px 10px' }}>
                 Range: {rangeDisplay}m
@@ -688,15 +597,15 @@ export default function App() {
       </div>
 
       {/* =========================================================================
-          BOTTOM ON-SCREEN / TOUCH CONTROLS (Small & UnobtrusiveSmall & Unobtrusive)
+          BOTTOM ON-SCREEN / TOUCH CONTROLS (Small & Unobtrusive)
          ========================================================================= */}
       <div style={{
         position: 'absolute',
-        bottom: 1212,
+        bottom: 12,
         left: '50%',
         transform: 'translateX(-50%)',
         display: 'flex',
-        gap: 66,
+        gap: 6,
         alignItems: 'center',
         zIndex: 10,
       }}>
@@ -706,7 +615,7 @@ export default function App() {
           onTouchStart={() => sendAction(2)}
           onTouchEnd={() => sendAction(0)}
           className="touch-btn"
-          title="Tilt Left [AA or ←←]"
+          title="Tilt Left [A or ←]"
         >
           ◀
         </button>
@@ -717,9 +626,9 @@ export default function App() {
           onTouchStart={() => sendAction(1)}
           onTouchEnd={() => sendAction(0)}
           className="touch-btn touch-btn-thrust"
-          title="ThrustThrust [WW or ↑↑]"
+          title="Thrust [W or ↑]"
         >
-          ▲ ThrustThrust
+          ▲ Thrust
         </button>
 
         <button

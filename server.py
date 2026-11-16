@@ -17,6 +17,7 @@ from fastapi.staticfiles import StaticFiles
 from config import Config, GameMode
 from lunar_lander_env import LunarLanderEnv
 from telemetry import TelemetryLogger
+from policy import PIDLanderAutopilot, LanderPolicy
 
 app = FastAPI(title="Lunar Lander Gymnasium API")
 
@@ -29,10 +30,26 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Load trained PyTorch RL neural policy if weights exist
+MODEL_PATH = os.path.join(os.path.dirname(__file__), "models", "lander_policy.pt")
+neural_policy = None
+if os.path.exists(MODEL_PATH):
+    try:
+        neural_policy = LanderPolicy(state_dim=6, action_dim=4, hidden_dim=128)
+        neural_policy.load(MODEL_PATH)
+        neural_policy.eval()
+        print(f"✓ Trained Gymnasium RL Policy loaded from '{MODEL_PATH}'")
+    except Exception as e:
+        print(f"Notice: Could not load neural policy ({e}), using PID autopilot fallback.")
+
 
 @app.get("/api/health")
 async def health_check():
-    return {"status": "ok", "physics_engine": "Gymnasium"}
+    return {
+        "status": "ok",
+        "physics_engine": "Gymnasium",
+        "rl_policy_loaded": neural_policy is not None,
+    }
 
 
 @app.get("/api/telemetry.csv")
@@ -40,7 +57,6 @@ async def download_telemetry_csv():
     """Download the telemetry.csv file generated from flights."""
     csv_path = Config.TELEMETRY_CSV_FILE
     if not os.path.exists(csv_path):
-        # Create empty with header if missing
         logger = TelemetryLogger(csv_filepath=csv_path)
     return FileResponse(
         path=csv_path,
@@ -69,17 +85,20 @@ async def websocket_game_endpoint(websocket: WebSocket):
     """Real-time bidirectional WebSocket loop for Gymnasium physics simulation."""
     await websocket.accept()
 
-    current_mode = GameMode.HARD
+    # Per LLG.md, default mode is Easy (Gravity wouldn't act, relaxed constraints)
+    current_mode = GameMode.EASY
     env = LunarLanderEnv(mode=current_mode, render_mode=None)
     env.reset()
 
     current_action = 0  # 0: Coast
     is_paused = False
     is_running = True
+    is_autopilot = False
+    autopilot = PIDLanderAutopilot(mode=current_mode)
 
     # Incoming message listener task
     async def receive_actions():
-        nonlocal current_action, current_mode, is_paused, is_running
+        nonlocal current_action, current_mode, is_paused, is_running, is_autopilot
         try:
             while is_running:
                 data = await websocket.receive_text()
@@ -87,14 +106,20 @@ async def websocket_game_endpoint(websocket: WebSocket):
                 msg_type = msg.get("type", "action")
 
                 if msg_type == "action":
-                    current_action = int(msg.get("action", 0))
+                    act = int(msg.get("action", 0))
+                    current_action = act
+                    if act != 0:
+                        is_autopilot = False
+                elif msg_type == "toggle_autopilot":
+                    is_autopilot = not is_autopilot
                 elif msg_type == "reset":
                     env.reset()
                     current_action = 0
                 elif msg_type == "set_mode":
-                    mode_str = msg.get("mode", "Hard")
-                    current_mode = GameMode.EASY if mode_str == "Easy" else GameMode.HARD
+                    mode_str = msg.get("mode", "Easy")
+                    current_mode = GameMode.HARD if mode_str == "Hard" else GameMode.EASY
                     env.set_mode(current_mode)
+                    autopilot.mode = current_mode
                     env.reset()
                     current_action = 0
                 elif msg_type == "toggle_pause":
@@ -113,12 +138,26 @@ async def websocket_game_endpoint(websocket: WebSocket):
             step_start = asyncio.get_event_loop().time()
 
             if not is_paused and not env.is_terminal:
+                if is_autopilot:
+                    if neural_policy is not None:
+                        obs = env._get_obs()
+                        current_action = neural_policy.get_action(obs, deterministic=True)
+                    else:
+                        current_action = autopilot.get_action(
+                            altitude=env.altitude,
+                            pos_x=env.pos_x,
+                            vertical_vel=env.vertical_velocity,
+                            horizontal_vel=env.horizontal_velocity,
+                            tilt_angle=env.tilt_angle,
+                            fuel_consumed=env.fuel_consumed,
+                        )
                 # Step the server-side Gymnasium physics
                 env.step(current_action)
 
             # Extract full state
             state = env.get_full_state()
             state["is_paused"] = is_paused
+            state["is_autopilot"] = is_autopilot
 
             # Push state frame to React client
             await websocket.send_text(json.dumps(state))

@@ -1,6 +1,8 @@
 # Lunar Lander Game (LLG)
 
-A simple Lunar Lander game using React.js + HTML5 Canvas and Gymnasium (RL) with minimal set of parameters such as 
+A 2D Atari vector wireframe Lunar Lander game built with **FastAPI + Gymnasium (server-side continuous physics)** and **React.js + HTML5 Canvas (frontend)**, featuring an **Imitation & Reinforcement Learning (DAgger) policy** trained on successful telemetry data.
+
+📖 **Flight Guide**: Check out **[guide.md](file:///home/obi025/Documents/LLG/guide.md)** for a complete step-by-step pilot manual on how to land gently and master both Easy and Hard modes.
 
 | Parameters        | Unit | Data type | State   |
 | ----------------- | ---- | --------- | ------- |
@@ -14,77 +16,93 @@ A simple Lunar Lander game using React.js + HTML5 Canvas and Gymnasium (RL) with
 | Mode              | -    | Enum      | Static  |
 | Result            | -    | Boolean   | Static  |
 
-## Constant Parameters
+---
 
-1. Fuel Consumption - Mass flow (amount of fuel burnt per second)
-2. Alt - (Starting point)
-3. Range - starting point for lander to pad
-4. Throttle impact on vertical velocity per percentage - tilt has to be accounted 
+## Calibrated Parameters
 
-| Parameter from LLG.md    | Substituted Constant                | Unit    |
-| :----------------------- | :---------------------------------- | :------ |
-| **1. Fuel Consumption**  | `2.5%` (Main) / `0.5%` (Pitch)      | % / sec |
-| **2. Starting Altitude** | `500.0`                             | meters  |
-| **3. Starting Range**    | `300.0` (pos_x: `-300.0`)           | meters  |
-| **4. Max Thrust Accel**  | `3.50` (projected by $\cos \theta$) | m/s²    |
+| Parameter from LLG.md    | Substituted Constant                | Unit    | Description |
+| :----------------------- | :---------------------------------- | :------ | :---------- |
+| **1. Fuel Consumption**  | `2.5%` Hard / `1.0%` Easy (Main)    | % / sec | Rate of propellant consumption during thrusting |
+| **2. Starting Altitude** | `500.0`                             | meters  | Initial release altitude |
+| **3. Starting Range**    | `300.0` (pos_x: `-300.0`)           | meters  | Horizontal offset on the left side of landing pad |
+| **4. Max Thrust Accel**  | `3.50` (projected by $\cos \theta$) | m/s²    | Vertical throttle thrust accounting for tilt |
 
-These telemetry values will be stored in .csv file, so that we can train the Lander with Gymnasium RL to create a optimized policy only using the telemetry data of successful landings. (Imitation training instead of PPO)
+---
 
-## Constraints 
+## Modes
 
-1. Sink Rate (< 1.0 m/s), Horizontal Velocity (<0.5 m/s)
-2. Tilt Angle (<10 deg)
-3. Fuel consumption (can't thrust or pitch after < 0%)
+Both modes share the exact same Moon Gravity force ($g = 1.62\text{ m/s}^2$):
 
-## Modes 
+1. **Easy Mode**:
+   - **Gravity**: $1.62\text{ m/s}^2$ (Moon gravity)
+   - **Fuel**: **Generous Fuel** ($1.0\%/\text{s}$ main thrust, $0.2\%/\text{s}$ pitch — 2.5× more flight endurance)
+   - **Constraints**: **Relaxed** (Sink rate $< 3.0\text{ m/s}$, Tilt $< 25^\circ$)
+2. **Hard Mode**:
+   - **Gravity**: $1.62\text{ m/s}^2$ (Moon gravity)
+   - **Fuel**: **Default Fuel** ($2.5\%/\text{s}$ main thrust, $0.5\%/\text{s}$ pitch)
+   - **Constraints**: **Strict** (Sink rate $< 1.0\text{ m/s}$, Tilt $< 10^\circ$)
 
-1. Easy - Gravity wouldn't act and constraints are relaxed. 
-2. Hard - Includes Gravity Force (1.62 m/s which consumes more fuel and decreases the vertical velocity), strict constraints 
+---
 
-## Controls & Movements 
+## Constraints
 
-1. Thrust (△) - Ascending meters 
-2. Pitch (◁ | ▷) - Tilt angle 
-3. Pause (Spacebar)
+1. **Sink Rate**: Hard Mode ($< 1.0\text{ m/s}$), Easy Mode ($< 3.0\text{ m/s}$)
+2. **Tilt Angle**: Hard Mode ($< 10^\circ$), Easy Mode ($< 25^\circ$)
+3. **Pad Alignment**: Touchdown within landing pad flags ($|pos\_x| \le 50\text{m}$)
+4. **Fuel Depletion**: Controls lock when fuel consumed reaches 100%
+
+---
+
+## Reinforcement Learning & Imitation Learning (Gymnasium)
+
+The lander policy is trained with **DAgger (Dataset Aggregation)** on successful landing telemetry:
+1. **Analytical Expert Guidance**: Uses a calibrated guidance controller (`PIDLanderAutopilot` in `policy.py`) to generate flawless demonstration trajectories.
+2. **Continuous Physics Rollouts**: Interacts directly with `LunarLanderEnv` (headless Gymnasium environment at 60 Hz).
+3. **DAgger Mitigation of Covariate Shift**: The neural policy explores flight corridors under expert supervision across perturbed starting conditions, learning robust recovery behaviors.
+4. **Performance Benchmark**:
+   - **Touchdown Success Rate**: 100% (5/5 evaluation flights in Hard mode)
+   - **Average Sink Rate**: $0.56\text{ m/s}$ ($< 1.0\text{ m/s}$ constraint)
+   - **Average Tilt Angle**: $3.0^\circ$ ($< 10.0^\circ$ constraint)
+   - **Average Fuel Left**: $9.7\%$
+
+### Train or Evaluate Policy
+```bash
+# Train DAgger policy and benchmark in Gymnasium
+.venv/bin/python3 train_rl.py --episodes 5 --mode Hard
+```
+
+---
+
+## Controls
+
+- **Thrust**: `▲` / `W` / `Arrow Up`
+- **Tilt Left**: `◀` / `A` / `Arrow Left`
+- **Tilt Right**: `▶` / `D` / `Arrow Right`
+- **AI Autopilot**: `P` (toggles trained RL neural policy)
+- **Pause / Resume**: `Spacebar`
+- **Restart**: `R`
+- **Toggle Mode**: `M` (Easy / Hard)
+
+---
+
+## Quickstart
 
 ### 1. Install Dependencies
 ```bash
-# Python backend dependencies
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 
-# React frontend dependencies
 cd frontend && npm install && npm run build && cd ..
 ```
 
-### 2. Start the Mission Control Web App
+### 2. Launch Mission Control Server
 ```bash
 .venv/bin/python3 server.py
 ```
 Open **[http://localhost:8000](http://localhost:8000)** in your browser!
 
----
-
-## Project Structure
-
-```
-├── config.py            # Physics parameters, gravity modes & constraints
-├── lunar_lander_env.py  # Pure headless Gymnasium environment (no Pygame bloat)
-├── server.py            # FastAPI WebSocket & HTTP REST server
-├── telemetry.py         # 1 Hz flight telemetry CSV logger
-├── test_suite.py        # Consolidated test suite (physics, constraints, server)
-├── requirements.txt     # Python backend dependencies
-├── telemetry.csv        # 1 Hz flight logs
-└── frontend/            # React.js + HTML5 Canvas web client
-```
-
----
-
-## Testing
-
-Run the test suite:
+### 3. Run Automated Tests
 ```bash
 .venv/bin/python3 test_suite.py
 ```
-Verifies physics equations, gravity modes, thruster fuel burn, landing constraints, 1 Hz CSV telemetry, and FastAPI WebSocket communication.

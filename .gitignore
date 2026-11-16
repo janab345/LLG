@@ -3,3 +3,7 @@ __pycache__
 skills
 Assets
 frontend/node_modules
+*.scratch.csv
+test_pid.csv
+models/*.csv
+telemetry.csv

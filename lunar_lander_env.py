@@ -1,8 +1,13 @@
-"""Gymnasium Environment for Lunar Lander Game (LLG).
+"""Gymnasium environment for 2D Apollo Lunar Lander Game (LLG).
 
-Compatible with standard Gymnasium RL APIs.
-Simulates lunar lander physics, constraints checking, and 1 Hz telemetry logging.
-Runs headless on server side, serving physics frames to frontend.
+Operates as a pure, headless Gymnasium environment with continuous physics.
+Adheres strictly to the LLG specification in LLG.md:
+- 1 Hz Telemetry logging to CSV
+- Dynamic parameters: Time, Fuel Consumed, Vertical Vel, Horizontal Vel, Alt, Tilt, Range
+- Static parameters: Mode (Easy/Hard), Result (True/False)
+- Moon gravity (1.62 m/s²) acts in both Easy and Hard modes
+- Easy mode: Generous fuel (2.5x more flight endurance) and relaxed constraints (< 3.0 m/s sink rate, < 25° tilt)
+- Hard mode: Default fuel and strict constraints (< 1.0 m/s sink rate, < 10° tilt)
 """
 
 import math
@@ -16,43 +21,45 @@ from telemetry import TelemetryLogger
 
 
 class LunarLanderEnv(gym.Env):
-    """Custom Gymnasium environment for Lunar Lander Game."""
+    """Headless 2D Lunar Lander Gymnasium Environment."""
 
-    metadata = {"render_modes": [None], "render_fps": Config.FPS}
+    metadata = {"render_modes": ["human", "rgb_array"], "render_fps": Config.FPS}
 
     def __init__(
         self,
-        mode: GameMode = GameMode.HARD,
-        render_mode: Optional[str] = None,
+        mode: GameMode = GameMode.EASY,
         telemetry_file: str = Config.TELEMETRY_CSV_FILE,
+        render_mode: Optional[str] = None,
     ):
         super().__init__()
-
         self.mode = mode
         self.render_mode = render_mode
-        self.telemetry_logger = TelemetryLogger(csv_filepath=telemetry_file)
 
-        # Action Space:
-        # 0: Coast / Idle (no thrust)
-        # 1: Main Thrust
-        # 2: Tilt Left (counter-clockwise)
-        # 3: Tilt Right (clockwise)
+        # Discrete Action Space:
+        # 0: Coast (no thrust)
+        # 1: Main Engine Thrust
+        # 2: Pitch Left (counter-clockwise tilt)
+        # 3: Pitch Right (clockwise tilt)
         self.action_space = spaces.Discrete(4)
 
         # Observation Space:
-        # [Altitude (m), Range to Pad (m), Vertical Velocity (m/s), Horizontal Velocity (m/s), Tilt Angle (deg), Fuel Consumed (%)]
-        low = np.array([0.0, 0.0, -100.0, -100.0, -180.0, 0.0], dtype=np.float32)
-        high = np.array([2000.0, 2000.0, 100.0, 100.0, 180.0, 100.0], dtype=np.float32)
+        # [Altitude (m), pos_x (m), Vertical Vel (m/s), Horizontal Vel (m/s), Tilt Angle (deg), Fuel Consumed (%)]
+        # pos_x is signed (-left, +right relative to pad center 0.0) so RL policies know where to steer.
+        low = np.array([0.0, -1000.0, -100.0, -100.0, -180.0, 0.0], dtype=np.float32)
+        high = np.array([2000.0, 1000.0, 100.0, 100.0, 180.0, 100.0], dtype=np.float32)
         self.observation_space = spaces.Box(low=low, high=high, dtype=np.float32)
 
-        # State Variables
+        # Initialize telemetry CSV logger
+        self.telemetry_logger = TelemetryLogger(csv_filepath=telemetry_file)
+
+        # State variables
         self.altitude: float = Config.START_ALTITUDE
-        self.pos_x: float = Config.START_POS_X  # -300m (300m to the left of pad)
-        self.range_to_pad: float = abs(self.pos_x)  # Distance in meters (positive: 300m)
+        self.pos_x: float = Config.START_POS_X
+        self.range_to_pad: float = abs(Config.START_POS_X)
         self.vertical_velocity: float = Config.START_VERTICAL_VELOCITY
         self.horizontal_velocity: float = Config.START_HORIZONTAL_VELOCITY
-        self.tilt_angle: float = Config.START_TILT_ANGLE  # Degrees
-        self.fuel_consumed: float = float(Config.START_FUEL_CONSUMED)  # Percentage (0-100)
+        self.tilt_angle: float = Config.START_TILT_ANGLE
+        self.fuel_consumed: float = float(Config.START_FUEL_CONSUMED)
         self.elapsed_time: float = 0.0
         self.steps: int = 0
 
@@ -83,7 +90,6 @@ class LunarLanderEnv(gym.Env):
         if options and "pos_x" in options:
             self.pos_x = float(options["pos_x"])
         elif options and "range" in options:
-            # If range specified, default to offset on the left
             self.pos_x = -abs(float(options["range"]))
         else:
             self.pos_x = Config.START_POS_X
@@ -102,7 +108,6 @@ class LunarLanderEnv(gym.Env):
 
         # Initialize telemetry logger for this episode
         self.telemetry_logger.start_episode(self.mode)
-        # Log initial tick at t = 0s (Range is positive distance to pad)
         self.telemetry_logger.log_tick(
             elapsed_time=self.elapsed_time,
             fuel_consumed=self.fuel_consumed,
@@ -122,7 +127,7 @@ class LunarLanderEnv(gym.Env):
         return np.array(
             [
                 self.altitude,
-                self.range_to_pad,
+                self.pos_x,
                 self.vertical_velocity,
                 self.horizontal_velocity,
                 self.tilt_angle,
@@ -158,6 +163,7 @@ class LunarLanderEnv(gym.Env):
             "landing_success": bool(self.landing_success),
             "status_message": self.status_message,
             "mode": self.mode.value,
+            "gravity": float(Config.MOON_GRAVITY),
             "last_action": int(self.last_action),
             "sink_rate": float(-self.vertical_velocity if self.vertical_velocity < 0 else 0.0),
             "max_sink_rate": float(max_sink),
@@ -177,26 +183,33 @@ class LunarLanderEnv(gym.Env):
 
         has_fuel = self.fuel_consumed < 100.0
 
-        thrust_vx = 0.0
-        thrust_vy = 0.0
+        # Fuel burn rate based on mode (generous fuel in Easy mode, default in Hard mode)
+        if self.mode == GameMode.EASY:
+            main_fuel_rate = Config.EASY_MAIN_THRUST_FUEL_RATE
+            pitch_fuel_rate = Config.EASY_PITCH_FUEL_RATE
+        else:
+            main_fuel_rate = Config.HARD_MAIN_THRUST_FUEL_RATE
+            pitch_fuel_rate = Config.HARD_PITCH_FUEL_RATE
 
-        # 1. Action dynamics
+        # 1. Apply Actions & Propellant Consumption
+        thrust_ax = 0.0
+        thrust_ay = 0.0
+
+        # Action 1: Main Thruster
         if action == 1 and has_fuel:
-            # Main Thrust
-            self.fuel_consumed = min(100.0, self.fuel_consumed + Config.MAIN_THRUST_FUEL_RATE * dt)
-            angle_rad = math.radians(self.tilt_angle)
-            thrust_accel = Config.MAIN_THRUST_ACCEL
-            thrust_vx = thrust_accel * math.sin(angle_rad)
-            thrust_vy = thrust_accel * math.cos(angle_rad)
+            self.fuel_consumed = min(100.0, self.fuel_consumed + main_fuel_rate * dt)
+            rad = math.radians(self.tilt_angle)
+            thrust_ax = -Config.MAIN_THRUST_ACCEL * math.sin(rad)
+            thrust_ay = Config.MAIN_THRUST_ACCEL * math.cos(rad)
 
+        # Action 2: Pitch Left (Counter-Clockwise)
         elif action == 2 and has_fuel:
-            # Pitch Left (tilt counter-clockwise, negative angle)
-            self.fuel_consumed = min(100.0, self.fuel_consumed + Config.PITCH_FUEL_RATE * dt)
+            self.fuel_consumed = min(100.0, self.fuel_consumed + pitch_fuel_rate * dt)
             self.tilt_angle -= Config.PITCH_SPEED * dt
 
+        # Action 3: Pitch Right (Clockwise)
         elif action == 3 and has_fuel:
-            # Pitch Right (tilt clockwise, positive angle)
-            self.fuel_consumed = min(100.0, self.fuel_consumed + Config.PITCH_FUEL_RATE * dt)
+            self.fuel_consumed = min(100.0, self.fuel_consumed + pitch_fuel_rate * dt)
             self.tilt_angle += Config.PITCH_SPEED * dt
 
         # Wrap tilt angle within [-180, 180]
@@ -205,24 +218,29 @@ class LunarLanderEnv(gym.Env):
         elif self.tilt_angle < -180.0:
             self.tilt_angle += 360.0
 
-        # 2. Gravity
-        gravity = Config.GRAVITY_HARD if self.mode == GameMode.HARD else Config.GRAVITY_EASY
+        # 2. Gravity (1.62 m/s^2 Moon gravity acts in BOTH Easy and Hard modes)
+        gravity = Config.MOON_GRAVITY
 
         # 3. Acceleration & Velocity update
-        accel_x = thrust_vx
-        accel_y = thrust_vy - gravity
+        accel_x = thrust_ax
+        accel_y = thrust_ay - gravity
 
         self.horizontal_velocity += accel_x * dt
         self.vertical_velocity += accel_y * dt
 
         # 4. Position & Range update
         self.pos_x += self.horizontal_velocity * dt
-        self.range_to_pad = abs(self.pos_x)  # Calibrated non-negative range to pad
+        self.range_to_pad = abs(self.pos_x)
         self.altitude += self.vertical_velocity * dt
 
         # 5. Constraints and Landing Check
         terminated = False
-        reward = 0.0
+        reward = (
+            - 0.02 * (self.range_to_pad / 100.0)
+            - 0.05 * ((self.tilt_angle / 15.0) ** 2)
+            - 0.02 * max(0.0, -self.vertical_velocity - 2.0)
+            - 0.01 * (1.0 if action == 1 else 0.0)
+        )
 
         if self.mode == GameMode.HARD:
             max_sink = Config.HARD_MAX_SINK_RATE
@@ -246,7 +264,7 @@ class LunarLanderEnv(gym.Env):
             if on_pad and acceptable_sink and acceptable_tilt:
                 self.landing_success = True
                 self.status_message = "SUCCESSFUL LANDING!"
-                reward = 100.0 + (100.0 - self.fuel_consumed)
+                reward += 150.0 + (100.0 - self.fuel_consumed)
             else:
                 self.landing_success = False
                 failure_reasons = []
@@ -257,7 +275,7 @@ class LunarLanderEnv(gym.Env):
                 if not on_pad:
                     failure_reasons.append(f"Missed Pad (Range: {self.range_to_pad:.1f} m)")
                 self.status_message = "CRASH: " + ", ".join(failure_reasons)
-                reward = -100.0
+                reward += -100.0
 
         # Out-of-bounds check
         elif self.altitude > 1500.0 or self.range_to_pad > 700.0:
@@ -276,17 +294,20 @@ class LunarLanderEnv(gym.Env):
             altitude=self.altitude,
             tilt_angle=self.tilt_angle,
             range_to_pad=self.range_to_pad,
-            force=terminated,
         )
 
-        if terminated:
-            self.telemetry_logger.finish_episode(self.landing_success)
+        # On touchdown or terminal, finalize telemetry episode
+        if self.is_terminal:
+            self.telemetry_logger.finish_episode(result=self.landing_success)
 
+        truncated = False
         obs = self._get_obs()
         info = self._get_info()
 
-        return obs, reward, terminated, False, info
+        return obs, reward, terminated, truncated, info
 
-    def close(self) -> None:
-        """Close environment."""
-        pass
+    def close(self):
+        """Cleanup resources on close."""
+        if hasattr(self, "telemetry_logger") and getattr(self.telemetry_logger, "episode_active", False):
+            if self.telemetry_logger.episode_buffer:
+                self.telemetry_logger.finish_episode(result=self.landing_success)
