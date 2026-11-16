@@ -81,7 +81,7 @@ Open **[http://localhost:8000](http://localhost:8000)** in your browser!
 
 ---
 
-## 🧪 Testing
+## Testing
 
 Run the test suite:
 ```bash
