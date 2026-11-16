@@ -1,39 +1,51 @@
 # Lunar Lander Game (LLG)
 
-A 2D Atari-style vector Lunar Lander simulation featuring a **server-side Gymnasium physics engine** powered by **FastAPI**, an interactive **React.js + HTML5 Canvas** mission control cockpit, and 1 Hz CSV flight telemetry logging for imitation learning / reinforcement learning.
+A simple Lunar Lander game using React.js + HTML5 Canvas and Gymnasium (RL) with minimal set of parameters such as 
 
----
+| Parameters        | Unit | Data type | State   |
+| ----------------- | ---- | --------- | ------- |
+| Time stamp        | time | time      | Dynamic |
+| Fuel Consumed     | %    | int       | Dynamic |
+| Vertical Velocity | m/s  | int       | Dynamic |
+| Horizontal Vel    | m/s  | int       | Dynamic |
+| Altitude          | m    | int       | Dynamic |
+| Tilt Angle        | deg  | int       | Dynamic |
+| Range to Pad      | m    | int       | Dynamic |
+| Mode              | -    | Enum      | Static  |
+| Result            | -    | Boolean   | Static  |
 
-## 🏛️ Architecture Overview
+## Constant Parameters
 
-```
-                      +---------------------------------------+
-                      |       React.js Frontend (Browser)     |
-                      |  - Atari 2D Vector Canvas (60 FPS)   |
-                      |  - Top Pill Badges & Capsule Gauges   |
-                      |  - Keyboard & Compact Touch Controls  |
-                      +-------------------+-------------------+
-                                          |
-                                   WebSocket (/ws)
-                           60 FPS Actions & State Stream
-                                          |
-                                          v
-                      +---------------------------------------+
-                      |         FastAPI Backend Server        |
-                      |  - Headless Gymnasium Physics Loop    |
-                      |  - LunarLanderEnv (Moon / Zero-G)     |
-                      |  - 1 Hz Telemetry Logger             |
-                      +-------------------+-------------------+
-                                          |
-                                    Logs to Disk
-                                          v
-                                    telemetry.csv
-                      (Ready for Imitation Learning / Offline RL)
-```
+1. Fuel Consumption - Mass flow (amount of fuel burnt per second)
+2. Alt - (Starting point)
+3. Range - starting point for lander to pad
+4. Throttle impact on vertical velocity per percentage - tilt has to be accounted 
 
----
+| Parameter from LLG.md    | Substituted Constant                | Unit    |
+| :----------------------- | :---------------------------------- | :------ |
+| **1. Fuel Consumption**  | `2.5%` (Main) / `0.5%` (Pitch)      | % / sec |
+| **2. Starting Altitude** | `500.0`                             | meters  |
+| **3. Starting Range**    | `300.0` (pos_x: `-300.0`)           | meters  |
+| **4. Max Thrust Accel**  | `3.50` (projected by $\cos \theta$) | m/s²    |
 
-## 🚀 Quickstart
+These telemetry values will be stored in .csv file, so that we can train the Lander with Gymnasium RL to create a optimized policy only using the telemetry data of successful landings. (Imitation training instead of PPO)
+
+## Constraints 
+
+1. Sink Rate (< 1.0 m/s), Horizontal Velocity (<0.5 m/s)
+2. Tilt Angle (<10 deg)
+3. Fuel consumption (can't thrust or pitch after < 0%)
+
+## Modes 
+
+1. Easy - Gravity wouldn't act and constraints are relaxed. 
+2. Hard - Includes Gravity Force (1.62 m/s which consumes more fuel and decreases the vertical velocity), strict constraints 
+
+## Controls & Movements 
+
+1. Thrust (△) - Ascending meters 
+2. Pitch (◁ | ▷) - Tilt angle 
+3. Pause (Spacebar)
 
 ### 1. Install Dependencies
 ```bash
@@ -54,7 +66,7 @@ Open **[http://localhost:8000](http://localhost:8000)** in your browser!
 
 ---
 
-## 📁 Clean Project Structure
+## Project Structure
 
 ```
 ├── config.py            # Physics parameters, gravity modes & constraints
@@ -66,20 +78,6 @@ Open **[http://localhost:8000](http://localhost:8000)** in your browser!
 ├── telemetry.csv        # 1 Hz flight logs
 └── frontend/            # React.js + HTML5 Canvas web client
 ```
-
----
-
-## 🎮 Flight Controls
-
-| Action | Primary Key | Secondary Key | On-Screen Button |
-| :--- | :--- | :--- | :--- |
-| **Thrust ($\triangle$)** | `Up Arrow` | `W` | `▲ Thrust` |
-| **Pitch Left ($\triangleleft$)** | `Left Arrow` | `A` | `◀` |
-| **Pitch Right ($\triangleright$)** | `Right Arrow` | `D` | `▶` |
-| **Pause / Resume** | `Spacebar` | - | `⏸ / ▶` |
-| **Toggle Mode** | `M` | - | `Mode: Easy / Hard` pill |
-| **Restart Attempt** | `R` | - | `↺ [R]` pill |
-| **Export Telemetry** | - | - | `CSV` pill |
 
 ---
 
