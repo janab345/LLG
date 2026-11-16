@@ -195,21 +195,112 @@ export default function App() {
     const leftFlagX = centerX - padWidthPx / 2;
     const rightFlagX = centerX + padWidthPx / 2;
 
-    // Draw Minimal Ground Line
-    ctx.strokeStyle = '#272a31';
+    // =========================================================================
+    // LUNAR TERRAIN WITH CRATERS (Atari 2D Vector Style)
+    // =========================================================================
+    const leftSpan = leftFlagX;
+    const rightSpan = width - rightFlagX;
+
+    // Defined craters: [centerX, radius, bowlDepth, rimElevation]
+    const craters = [
+      // Left terrain craters
+      [leftSpan * 0.18, Math.max(28, leftSpan * 0.12), 18, 4],
+      [leftSpan * 0.52, Math.max(42, leftSpan * 0.18), 28, 7],
+      [leftSpan * 0.82, Math.max(22, leftSpan * 0.09), 14, 3],
+      // Right terrain craters
+      [rightFlagX + rightSpan * 0.20, Math.max(24, rightSpan * 0.09), 16, 4],
+      [rightFlagX + rightSpan * 0.54, Math.max(46, rightSpan * 0.19), 30, 8],
+      [rightFlagX + rightSpan * 0.84, Math.max(30, rightSpan * 0.13), 20, 5],
+    ];
+
+    // Surface elevation at x coordinate
+    const getTerrainElevation = (x) => {
+      // Landing pad plateau between flags remains perfectly flat
+      if (x >= leftFlagX - 6 && x <= rightFlagX + 6) {
+        return groundY;
+      }
+      let y = groundY;
+      for (const [cx, r, depth, rim] of craters) {
+        const dx = Math.abs(x - cx);
+        if (dx < r) {
+          const norm = dx / r;
+          if (norm < 0.70) {
+            // Interior bowl depression
+            const bowlRatio = 1.0 - Math.pow(norm / 0.70, 2);
+            y += depth * bowlRatio;
+          } else {
+            // Raised ejecta rim lip
+            const t = (norm - 0.70) / 0.30;
+            y -= rim * Math.sin(t * Math.PI);
+          }
+        }
+      }
+      return y;
+    };
+
+    // 1. Distant background lunar mountain & crater ridge
+    ctx.save();
+    ctx.strokeStyle = '#1d2129';
     ctx.lineWidth = 1.5;
     ctx.beginPath();
+    for (let x = 0; x <= width; x += 25) {
+      const bgY = groundY - 22 - 14 * Math.sin(x * 0.006) - 8 * Math.cos(x * 0.016);
+      if (x === 0) ctx.moveTo(x, bgY);
+      else ctx.lineTo(x, bgY);
+    }
+    ctx.stroke();
+    ctx.restore();
+
+    // 2. Foreground cratered regolith body fill
+    ctx.save();
+    ctx.beginPath();
     ctx.moveTo(0, groundY);
-    ctx.lineTo(width, groundY);
+    const stepPx = 4;
+    for (let x = 0; x <= width; x += stepPx) {
+      ctx.lineTo(x, getTerrainElevation(x));
+    }
+    ctx.lineTo(width, height);
+    ctx.lineTo(0, height);
+    ctx.closePath();
+    ctx.fillStyle = '#13161a';
+    ctx.fill();
+
+    // 3. Vector outline of the cratered terrain surface
+    ctx.strokeStyle = '#3e4552';
+    ctx.lineWidth = 1.8;
+    ctx.beginPath();
+    for (let x = 0; x <= width; x += stepPx) {
+      const y = getTerrainElevation(x);
+      if (x === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
     ctx.stroke();
 
-    // Draw Pad Landing Surface Line
-    ctx.strokeStyle = '#4b5563';
-    ctx.lineWidth = 2;
+    // 4. Vector crater rim ellipses & bowl contour arcs (giving 2D depth)
+    for (const [cx, r, depth] of craters) {
+      if (cx - r < -20 || cx + r > width + 20) continue;
+      // Crater rim perspective ellipse
+      ctx.strokeStyle = '#2b303a';
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      ctx.ellipse(cx, groundY, r * 0.88, r * 0.22, 0, 0, Math.PI * 2);
+      ctx.stroke();
+
+      // Interior floor contour arc
+      ctx.strokeStyle = '#20242c';
+      ctx.beginPath();
+      ctx.ellipse(cx, groundY + depth * 0.55, r * 0.52, depth * 0.26, 0, 0, Math.PI);
+      ctx.stroke();
+    }
+
+    // 5. Flat Landing Pad Strip (Clear, highlighted runway between the flags)
+    ctx.strokeStyle = '#64748b';
+    ctx.lineWidth = 2.4;
     ctx.beginPath();
     ctx.moveTo(leftFlagX, groundY);
     ctx.lineTo(rightFlagX, groundY);
     ctx.stroke();
+    ctx.restore();
 
     // Helper: Draw Atari Wireframe Flag matching reference image
     const drawFlag = (fx, fy) => {
